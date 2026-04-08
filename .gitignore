@@ -5,3 +5,5 @@ node_modules
 /generated/prisma
 /prisma/dev.db
 /prisma/dev.db-*
+/prisma/test.db
+/prisma/test.db-*
