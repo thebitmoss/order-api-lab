@@ -138,3 +138,42 @@ test("POST /orders returns 409 when stock is insufficient", async () => {
   const orders = await prisma.order.findMany();
   assert.equal(orders.length, 0);
 });
+
+test("DELETE /orders/:id cancels an order and restores stock", async () => {
+  const product = await prisma.product.create({
+    data: {
+      name: "Cancel Product",
+      price: 1200,
+      stock: 7,
+    },
+  });
+
+  const order = await prisma.order.create({
+    data: {
+      productId: product.id,
+      quantity: 3,
+    },
+  });
+
+  const response = await request(app).delete(`/orders/${order.id}`).expect(200);
+
+  assert.equal(response.body.id, order.id);
+  assert.equal(response.body.productId, product.id);
+  assert.equal(response.body.quantity, 3);
+
+  const deletedOrder = await prisma.order.findUnique({
+    where: { id: order.id },
+  });
+  assert.equal(deletedOrder, null);
+
+  const updatedProduct = await prisma.product.findUnique({
+    where: { id: product.id },
+  });
+  assert.equal(updatedProduct.stock, 10);
+});
+
+test("DELETE /orders/:id returns 404 when order does not exist", async () => {
+  const response = await request(app).delete("/orders/9999").expect(404);
+
+  assert.equal(response.body.message, "Order not found.");
+});
