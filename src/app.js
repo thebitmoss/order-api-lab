@@ -1,4 +1,5 @@
 const express = require("express");
+const ordersRouter = require("./modules/orders/orders.routes");
 const productsRouter = require("./modules/products/products.routes");
 
 const app = express();
@@ -10,6 +11,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/products", productsRouter);
+app.use("/orders", ordersRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);
