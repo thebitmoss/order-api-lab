@@ -59,6 +59,13 @@ paths:
           description: Order list
     post:
       summary: Create order
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: Replays the first successful response when the same key and same request body are retried.
       requestBody:
         required: true
         content:
@@ -87,7 +94,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Insufficient stock
+          description: Insufficient stock or idempotency conflict
           content:
             application/json:
               schema:

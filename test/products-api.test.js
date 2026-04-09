@@ -8,6 +8,7 @@ const app = require("../src/app");
 const prisma = require("../src/lib/prisma");
 
 test.beforeEach(async () => {
+  await prisma.idempotencyKey.deleteMany();
   await prisma.order.deleteMany();
   await prisma.product.deleteMany();
 });

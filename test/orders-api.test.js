@@ -8,6 +8,7 @@ const app = require("../src/app");
 const prisma = require("../src/lib/prisma");
 
 test.beforeEach(async () => {
+  await prisma.idempotencyKey.deleteMany();
   await prisma.order.deleteMany();
   await prisma.product.deleteMany();
 });
@@ -68,6 +69,91 @@ test("POST /orders creates an order and decrements stock", async () => {
 
   const orders = await prisma.order.findMany();
   assert.equal(orders.length, 1);
+});
+
+test("POST /orders reuses the first success response for the same Idempotency-Key", async () => {
+  const product = await prisma.product.create({
+    data: {
+      name: "Idempotent Product",
+      price: 1500,
+      stock: 10,
+    },
+  });
+
+  const firstResponse = await request(app)
+    .post("/orders")
+    .set("Idempotency-Key", "order-create-1")
+    .send({
+      productId: product.id,
+      quantity: 3,
+    })
+    .expect(201);
+
+  const secondResponse = await request(app)
+    .post("/orders")
+    .set("Idempotency-Key", "order-create-1")
+    .send({
+      productId: product.id,
+      quantity: 3,
+    })
+    .expect(201);
+
+  assert.deepEqual(secondResponse.body, firstResponse.body);
+  assert.equal(secondResponse.headers["idempotency-replayed"], "true");
+
+  const orders = await prisma.order.findMany();
+  assert.equal(orders.length, 1);
+
+  const updatedProduct = await prisma.product.findUnique({
+    where: { id: product.id },
+  });
+  assert.equal(updatedProduct.stock, 7);
+
+  const idempotencyKeys = await prisma.idempotencyKey.findMany();
+  assert.equal(idempotencyKeys.length, 1);
+  assert.equal(idempotencyKeys[0].state, "COMPLETED");
+});
+
+test("POST /orders returns 409 when the same Idempotency-Key is used for a different request", async () => {
+  const product = await prisma.product.create({
+    data: {
+      name: "Conflict Product",
+      price: 1500,
+      stock: 10,
+    },
+  });
+
+  await request(app)
+    .post("/orders")
+    .set("Idempotency-Key", "order-create-2")
+    .send({
+      productId: product.id,
+      quantity: 3,
+    })
+    .expect(201);
+
+  const response = await request(app)
+    .post("/orders")
+    .set("Idempotency-Key", "order-create-2")
+    .send({
+      productId: product.id,
+      quantity: 4,
+    })
+    .expect(409);
+
+  assert.deepEqual(response.body.error, {
+    code: "IDEMPOTENCY_KEY_CONFLICT",
+    message: "Idempotency-Key is already used for a different request.",
+  });
+  assert.ok(response.body.requestId);
+
+  const orders = await prisma.order.findMany();
+  assert.equal(orders.length, 1);
+
+  const updatedProduct = await prisma.product.findUnique({
+    where: { id: product.id },
+  });
+  assert.equal(updatedProduct.stock, 7);
 });
 
 test("POST /orders returns 404 when product does not exist", async () => {

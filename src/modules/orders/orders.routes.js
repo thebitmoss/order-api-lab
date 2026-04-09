@@ -1,8 +1,49 @@
 const express = require("express");
 const { createHttpError } = require("../../lib/http-error");
+const { createRequestHash } = require("../../lib/idempotency");
 const prisma = require("../../lib/prisma");
 
 const router = express.Router();
+
+async function createOrderWithInventory(tx, productId, quantity) {
+  const product = await tx.product.findUnique({
+    where: { id: productId },
+  });
+
+  if (!product) {
+    return { status: "not_found" };
+  }
+
+  const stockUpdate = await tx.product.updateMany({
+    where: {
+      id: productId,
+      stock: {
+        gte: quantity,
+      },
+    },
+    data: {
+      stock: {
+        decrement: quantity,
+      },
+    },
+  });
+
+  if (stockUpdate.count === 0) {
+    return { status: "insufficient_stock" };
+  }
+
+  const order = await tx.order.create({
+    data: {
+      productId,
+      quantity,
+    },
+    include: {
+      product: true,
+    },
+  });
+
+  return { status: "created", order };
+}
 
 router.get("/", async (req, res, next) => {
   try {
@@ -20,6 +61,9 @@ router.get("/", async (req, res, next) => {
 });
 
 router.post("/", async (req, res, next) => {
+  const idempotencyKey = req.get("Idempotency-Key");
+  let ownedIdempotencyRecord = null;
+
   try {
     const { productId, quantity } = req.body;
 
@@ -37,53 +81,115 @@ router.post("/", async (req, res, next) => {
       );
     }
 
+    const requestHash = createRequestHash({ productId, quantity });
+
+    if (idempotencyKey) {
+      try {
+        ownedIdempotencyRecord = await prisma.idempotencyKey.create({
+          data: {
+            key: idempotencyKey,
+            method: "POST",
+            path: "/orders",
+            requestHash,
+            state: "IN_PROGRESS",
+          },
+        });
+      } catch (error) {
+        if (error.code !== "P2002") {
+          throw error;
+        }
+
+        const existingRecord = await prisma.idempotencyKey.findUnique({
+          where: {
+            key_method_path: {
+              key: idempotencyKey,
+              method: "POST",
+              path: "/orders",
+            },
+          },
+        });
+
+        if (!existingRecord) {
+          throw error;
+        }
+
+        if (existingRecord.requestHash !== requestHash) {
+          return next(
+            createHttpError(
+              409,
+              "IDEMPOTENCY_KEY_CONFLICT",
+              "Idempotency-Key is already used for a different request.",
+            ),
+          );
+        }
+
+        if (
+          existingRecord.state === "COMPLETED" &&
+          existingRecord.responseStatus &&
+          existingRecord.responseBody
+        ) {
+          res.setHeader("Idempotency-Replayed", "true");
+          return res
+            .status(existingRecord.responseStatus)
+            .json(JSON.parse(existingRecord.responseBody));
+        }
+
+        return next(
+          createHttpError(
+            409,
+            "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+            "A request with this Idempotency-Key is already being processed.",
+          ),
+        );
+      }
+    }
+
     const result = await prisma.$transaction(async (tx) => {
-      const product = await tx.product.findUnique({
-        where: { id: productId },
-      });
+      const orderResult = await createOrderWithInventory(tx, productId, quantity);
 
-      if (!product) {
-        return { status: "not_found" };
+      if (orderResult.status !== "created") {
+        return orderResult;
       }
 
-      const stockUpdate = await tx.product.updateMany({
-        where: {
-          id: productId,
-          stock: {
-            gte: quantity,
+      if (ownedIdempotencyRecord) {
+        await tx.idempotencyKey.update({
+          where: { id: ownedIdempotencyRecord.id },
+          data: {
+            state: "COMPLETED",
+            responseStatus: 201,
+            responseBody: JSON.stringify(orderResult.order),
           },
-        },
-        data: {
-          stock: {
-            decrement: quantity,
-          },
-        },
-      });
-
-      if (stockUpdate.count === 0) {
-        return { status: "insufficient_stock" };
+        });
       }
 
-      const order = await tx.order.create({
-        data: {
-          productId,
-          quantity,
-        },
-        include: {
-          product: true,
-        },
-      });
-
-      return { status: "created", order };
+      return orderResult;
     });
 
     if (result.status === "not_found") {
+      if (ownedIdempotencyRecord) {
+        await prisma.idempotencyKey.deleteMany({
+          where: {
+            id: ownedIdempotencyRecord.id,
+            state: "IN_PROGRESS",
+          },
+        });
+      }
+
       return next(
         createHttpError(404, "PRODUCT_NOT_FOUND", "Product not found."),
       );
     }
 
     if (result.status === "insufficient_stock") {
+      if (ownedIdempotencyRecord) {
+        await prisma.idempotencyKey.deleteMany({
+          where: {
+            id: ownedIdempotencyRecord.id,
+            state: "IN_PROGRESS",
+          },
+        });
+      }
+
       return next(
         createHttpError(409, "INSUFFICIENT_STOCK", "Insufficient stock."),
       );
@@ -91,6 +197,15 @@ router.post("/", async (req, res, next) => {
 
     res.status(201).json(result.order);
   } catch (error) {
+    if (ownedIdempotencyRecord) {
+      await prisma.idempotencyKey.deleteMany({
+        where: {
+          id: ownedIdempotencyRecord.id,
+          state: "IN_PROGRESS",
+        },
+      });
+    }
+
     next(error);
   }
 });
