@@ -20,6 +20,7 @@ test("GET /health returns ok", async () => {
   const response = await request(app).get("/health").expect(200);
 
   assert.deepEqual(response.body, { status: "ok" });
+  assert.ok(response.headers["x-request-id"]);
 });
 
 test("GET /products returns products", async () => {
@@ -67,10 +68,13 @@ test("POST /products rejects invalid input", async () => {
     })
     .expect(400);
 
-  assert.equal(
-    response.body.message,
-    "name, price, and stock are required. price and stock must be numbers.",
-  );
+  assert.deepEqual(response.body.error, {
+    code: "INVALID_PRODUCT_INPUT",
+    message:
+      "name, price, and stock are required. price and stock must be numbers.",
+  });
+  assert.ok(response.body.requestId);
+  assert.equal(response.body.requestId, response.headers["x-request-id"]);
 
   const products = await prisma.product.findMany();
   assert.equal(products.length, 0);
@@ -86,10 +90,26 @@ test("POST /products rejects invalid stock", async () => {
     })
     .expect(400);
 
-  assert.equal(
-    response.body.message,
-    "name, price, and stock are required. price and stock must be numbers.",
-  );
+  assert.deepEqual(response.body.error, {
+    code: "INVALID_PRODUCT_INPUT",
+    message:
+      "name, price, and stock are required. price and stock must be numbers.",
+  });
+  assert.ok(response.body.requestId);
+
+  const products = await prisma.product.findMany();
+  assert.equal(products.length, 0);
+});
+
+test("unknown route returns common 404 error response", async () => {
+  const response = await request(app).get("/unknown").expect(404);
+
+  assert.deepEqual(response.body.error, {
+    code: "NOT_FOUND",
+    message: "Resource not found.",
+  });
+  assert.ok(response.body.requestId);
+  assert.equal(response.body.requestId, response.headers["x-request-id"]);
 
   const products = await prisma.product.findMany();
   assert.equal(products.length, 0);
