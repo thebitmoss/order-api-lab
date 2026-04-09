@@ -79,7 +79,11 @@ test("POST /orders returns 404 when product does not exist", async () => {
     })
     .expect(404);
 
-  assert.equal(response.body.message, "Product not found.");
+  assert.deepEqual(response.body.error, {
+    code: "PRODUCT_NOT_FOUND",
+    message: "Product not found.",
+  });
+  assert.ok(response.body.requestId);
 
   const orders = await prisma.order.findMany();
   assert.equal(orders.length, 0);
@@ -102,10 +106,12 @@ test("POST /orders returns 400 when quantity is invalid", async () => {
     })
     .expect(400);
 
-  assert.equal(
-    response.body.message,
-    "productId and quantity are required. quantity must be a positive integer.",
-  );
+  assert.deepEqual(response.body.error, {
+    code: "INVALID_ORDER_INPUT",
+    message:
+      "productId and quantity are required. quantity must be a positive integer.",
+  });
+  assert.ok(response.body.requestId);
 
   const orders = await prisma.order.findMany();
   assert.equal(orders.length, 0);
@@ -128,7 +134,11 @@ test("POST /orders returns 409 when stock is insufficient", async () => {
     })
     .expect(409);
 
-  assert.equal(response.body.message, "Insufficient stock.");
+  assert.deepEqual(response.body.error, {
+    code: "INSUFFICIENT_STOCK",
+    message: "Insufficient stock.",
+  });
+  assert.ok(response.body.requestId);
 
   const updatedProduct = await prisma.product.findUnique({
     where: { id: product.id },
@@ -175,5 +185,9 @@ test("DELETE /orders/:id cancels an order and restores stock", async () => {
 test("DELETE /orders/:id returns 404 when order does not exist", async () => {
   const response = await request(app).delete("/orders/9999").expect(404);
 
-  assert.equal(response.body.message, "Order not found.");
+  assert.deepEqual(response.body.error, {
+    code: "ORDER_NOT_FOUND",
+    message: "Order not found.",
+  });
+  assert.ok(response.body.requestId);
 });

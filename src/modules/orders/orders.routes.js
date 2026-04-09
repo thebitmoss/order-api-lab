@@ -1,4 +1,5 @@
 const express = require("express");
+const { createHttpError } = require("../../lib/http-error");
 const prisma = require("../../lib/prisma");
 
 const router = express.Router();
@@ -27,9 +28,13 @@ router.post("/", async (req, res, next) => {
       !Number.isInteger(quantity) ||
       quantity <= 0
     ) {
-      return res.status(400).json({
-        message: "productId and quantity are required. quantity must be a positive integer.",
-      });
+      return next(
+        createHttpError(
+          400,
+          "INVALID_ORDER_INPUT",
+          "productId and quantity are required. quantity must be a positive integer.",
+        ),
+      );
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -73,11 +78,15 @@ router.post("/", async (req, res, next) => {
     });
 
     if (result.status === "not_found") {
-      return res.status(404).json({ message: "Product not found." });
+      return next(
+        createHttpError(404, "PRODUCT_NOT_FOUND", "Product not found."),
+      );
     }
 
     if (result.status === "insufficient_stock") {
-      return res.status(409).json({ message: "Insufficient stock." });
+      return next(
+        createHttpError(409, "INSUFFICIENT_STOCK", "Insufficient stock."),
+      );
     }
 
     res.status(201).json(result.order);
@@ -91,7 +100,7 @@ router.delete("/:id", async (req, res, next) => {
     const orderId = Number(req.params.id);
 
     if (!Number.isInteger(orderId)) {
-      return res.status(404).json({ message: "Order not found." });
+      return next(createHttpError(404, "ORDER_NOT_FOUND", "Order not found."));
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -120,7 +129,7 @@ router.delete("/:id", async (req, res, next) => {
     });
 
     if (result.status === "not_found") {
-      return res.status(404).json({ message: "Order not found." });
+      return next(createHttpError(404, "ORDER_NOT_FOUND", "Order not found."));
     }
 
     res.status(200).json(result.order);

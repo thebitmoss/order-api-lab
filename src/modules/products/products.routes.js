@@ -1,4 +1,5 @@
 const express = require("express");
+const { createHttpError } = require("../../lib/http-error");
 const prisma = require("../../lib/prisma");
 
 const router = express.Router();
@@ -20,9 +21,13 @@ router.post("/", async (req, res, next) => {
     const { name, price, stock = 0 } = req.body;
 
     if (!name || typeof price !== "number" || typeof stock !== "number") {
-      return res.status(400).json({
-        message: "name, price, and stock are required. price and stock must be numbers.",
-      });
+      return next(
+        createHttpError(
+          400,
+          "INVALID_PRODUCT_INPUT",
+          "name, price, and stock are required. price and stock must be numbers.",
+        ),
+      );
     }
 
     const product = await prisma.product.create({
